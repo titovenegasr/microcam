@@ -32,8 +32,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .app { position: fixed; inset: 0; display: flex; flex-direction: column; }
 .stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
-#video { position: absolute; width: 2px; height: 2px; opacity: .01; pointer-events: none; }
-#view { max-width: 100%; max-height: 100%; display: block; }
+.frame { position: relative; overflow: hidden; max-width: 100%; max-height: 100%; }
+#video { position: absolute; left: 50%; top: 50%; max-width: none; object-fit: fill; pointer-events: none; }
 .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
 .flash.on { opacity: .8; transition: none; }
 .count { position: absolute; font-size: 22vmin; font-weight: 700; color: #fff; text-shadow: 0 2px 20px #000; pointer-events: none; }
@@ -105,8 +105,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 <body>
 <div class="app">
   <div class="stage" id="stage">
-    <video id="video" playsinline muted autoplay></video>
-    <canvas id="view" aria-label="Vista en vivo del microscopio"></canvas>
+    <div class="frame" id="frame"><video id="video" playsinline muted autoplay aria-label="Vista en vivo del microscopio"></video></div>
     <div class="flash" id="flash"></div>
     <div class="count" id="count" hidden></div>
     <div class="hud">
@@ -157,6 +156,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       <div class="seg" id="segTimer"><button data-v="0">No</button><button data-v="2">2 s</button><button data-v="5">5 s</button></div></div>
     <div class="row"><label>Guardar en Fotos<span class="hint">Abre el menú de guardar después de cada foto</span></label>
       <div class="seg" id="segSave"><button data-v="1">Al tomar</button><button data-v="0">Al final</button></div></div>
+    <div class="row"><label>Resolución<span class="hint">Máxima da más detalle pero calienta más el iPhone</span></label>
+      <div class="seg" id="segRes"><button data-v="normal">Normal</button><button data-v="max">Máxima</button></div></div>
     <div class="row"><label>Lente del iPhone<span class="hint" id="camName">Cámara trasera</span></label>
       <button class="seg" id="bCam" style="padding:8px 12px">Cambiar</button></div>
     <button class="btn" id="setDone">Listo</button>
@@ -186,9 +187,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 <script>
 const $ = id => document.getElementById(id);
-const video = $('video'), view = $('view'), vctx = view.getContext('2d');
+const video = $('video'), frame = $('frame');
 
-const DEFAULTS = { rot: 180, flip: 0, crop: 'full', timer: 0, zoom: 1, deviceId: '', autosave: 1 };
+const DEFAULTS = { rot: 180, flip: 0, crop: 'full', timer: 0, zoom: 1, deviceId: '', autosave: 1, res: 'normal' };
 let cfg = { ...DEFAULTS };
 try { Object.assign(cfg, JSON.parse(localStorage.getItem('microcam') || '{}')); } catch (e) {}
 const save = () => { try { localStorage.setItem('microcam', JSON.stringify(cfg)); } catch (e) {} };
@@ -220,22 +221,21 @@ function paint(ctx, g, scale) {
   ctx.restore();
 }
 
-function loop() {
+// Vista en vivo: el video se gira con CSS (lo hace el iPhone sin gastar batería);
+// el marco recorta la misma zona que paint() usa en la foto. Solo se recalcula al cambiar algo.
+function layout() {
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (vw && vh) {
-    const g = geometry(vw, vh);
-    const box = $('stage').getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const fit = Math.min(box.width / g.ow, box.height / g.oh);
-    const cw = Math.round(g.ow * fit * dpr), ch = Math.round(g.oh * fit * dpr);
-    if (view.width !== cw || view.height !== ch) {
-      view.width = cw; view.height = ch;
-      view.style.width = (cw / dpr) + 'px'; view.style.height = (ch / dpr) + 'px';
-    }
-    paint(vctx, g, cw / g.ow);
-  }
-  requestAnimationFrame(loop);
+  if (!vw || !vh) return;
+  const g = geometry(vw, vh);
+  const box = $('stage').getBoundingClientRect();
+  const fit = Math.min(box.width / g.ow, box.height / g.oh);
+  frame.style.width = g.ow * fit + 'px'; frame.style.height = g.oh * fit + 'px';
+  video.style.width = vw * fit + 'px'; video.style.height = vh * fit + 'px';
+  video.style.transform = `translate(-50%, -50%) rotate(${cfg.rot}deg)${cfg.flip ? ' scaleX(-1)' : ''}`;
 }
+video.addEventListener('resize', layout);
+video.addEventListener('loadedmetadata', layout);
+window.addEventListener('resize', layout);
 
 // El iPhone ofrece cámaras "combinadas" (doble/triple) que saltan solas entre lentes;
 // en el adaptador eso hace desaparecer la imagen, así que solo se usan lentes individuales.
@@ -245,7 +245,9 @@ const mainLens = () => { const r = rearLenses(); return r.find(c => !SECOND.test
 
 async function openStream(deviceId) {
   if (stream) stream.getTracks().forEach(t => t.stop());
-  const v = { width: { ideal: 4032 }, height: { ideal: 3024 } };
+  const v = cfg.res === 'max'
+    ? { width: { ideal: 4032 }, height: { ideal: 3024 }, frameRate: { ideal: 30, max: 30 } }
+    : { width: { ideal: 1920 }, height: { ideal: 1440 }, frameRate: { ideal: 30, max: 30 } };
   if (deviceId) v.deviceId = { exact: deviceId };
   else v.facingMode = { ideal: 'environment' };
   stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
@@ -287,7 +289,7 @@ $('bStart').onclick = async () => {
   try {
     await startCamera();
     $('msg').hidden = true;
-    requestAnimationFrame(loop);
+    layout();
   } catch (e) {
     $('msgText').textContent = 'No se pudo abrir la cámara. Revise en Ajustes del iPhone → Safari → Cámara que esté en "Permitir", y vuelva a intentar.';
     $('bStart').textContent = 'Intentar de nuevo';
@@ -366,7 +368,14 @@ function seg(id, key, num) {
     cfg[key] = num ? +b.dataset.v : b.dataset.v; save(); syncUI();
   };
 }
-seg('segRot', 'rot', true); seg('segFlip', 'flip', true); seg('segCrop', 'crop', false); seg('segTimer', 'timer', true); seg('segSave', 'autosave', true);
+seg('segRot', 'rot', true); seg('segFlip', 'flip', true); seg('segCrop', 'crop', false); seg('segTimer', 'timer', true); seg('segSave', 'autosave', true); seg('segRes', 'res', false);
+// Cambiar la resolución requiere reabrir la cámara
+$('segRes').addEventListener('click', e => {
+  if (!stream || !e.target.closest('button')) return;
+  const cur = stream.getVideoTracks()[0].getSettings().deviceId;
+  openStream(cur).then(() => { layout(); $('camName').textContent = stream.getVideoTracks()[0].label + ' · ' + video.videoWidth + '×' + video.videoHeight; })
+    .catch(() => toast('No se pudo cambiar la resolución'));
+});
 
 $('bCam').onclick = async () => {
   const lenses = rearLenses();
@@ -385,7 +394,8 @@ function syncUI() {
   $('zoom').value = cfg.zoom; $('zoomOut').textContent = cfg.zoom.toFixed(1) + '×';
   $('bZoom').classList.toggle('on', !$('zoomBox').hidden);
   const mark = (id, v) => $(id).querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === String(v)));
-  mark('segRot', cfg.rot); mark('segFlip', cfg.flip); mark('segCrop', cfg.crop); mark('segTimer', cfg.timer); mark('segSave', cfg.autosave);
+  mark('segRot', cfg.rot); mark('segFlip', cfg.flip); mark('segCrop', cfg.crop); mark('segTimer', cfg.timer); mark('segSave', cfg.autosave); mark('segRes', cfg.res);
+  layout();
 }
 
 $('bSet').onclick = () => $('setSheet').hidden = false;
