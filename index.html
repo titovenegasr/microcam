@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>MicroCam</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MicroCam">
+<meta name="theme-color" content="#0b0d0e">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.json">
+<style>
+/* Visor a pantalla completa; controles en barra inferior (vertical) o lateral (horizontal) */
+:root {
+  --bg: #0b0d0e;
+  --panel: rgba(18, 22, 24, .82);
+  --line: rgba(255, 255, 255, .14);
+  --fg: #eef3f2;
+  --muted: #93a3a1;
+  --accent: #3fd0b5;
+  --warn: #ffb347;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.35 var(--font); overflow: hidden; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+.stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
+#video { position: absolute; width: 2px; height: 2px; opacity: .01; pointer-events: none; }
+#view { max-width: 100%; max-height: 100%; display: block; }
+.flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
+.flash.on { opacity: .8; transition: none; }
+.count { position: absolute; font-size: 22vmin; font-weight: 700; color: #fff; text-shadow: 0 2px 20px #000; pointer-events: none; }
+
+.hud { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 10px); left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); display: flex; gap: 8px; flex-wrap: wrap; pointer-events: none; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 12px; letter-spacing: .02em; color: var(--muted); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.chip b { color: var(--fg); font-weight: 600; }
+
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--panel); border-top: 1px solid var(--line);
+  padding: 10px max(16px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.group { display: flex; gap: 6px; align-items: center; }
+.tool { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; border: 1px solid var(--line); background: rgba(255,255,255,.04); }
+.tool svg { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tool.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.tool small { font-size: 11px; font-weight: 700; }
+.shutter { width: 74px; height: 74px; border-radius: 50%; border: 4px solid var(--fg); display: grid; place-items: center; flex: none; }
+.shutter span { width: 58px; height: 58px; border-radius: 50%; background: var(--fg); transition: transform .1s; }
+.shutter:active span { transform: scale(.88); }
+.thumb { width: 46px; height: 46px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); position: relative; background: #000; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb i { position: absolute; right: 2px; bottom: 2px; font-style: normal; font-size: 10px; font-weight: 700; background: var(--accent); color: var(--bg); border-radius: 6px; padding: 0 4px; }
+
+.zoom { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; width: min(320px, calc(100% - 32px)); }
+.zoom input { flex: 1; accent-color: var(--accent); }
+.zoom output { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; font-size: 13px; }
+
+/* Horizontal: barra a la derecha */
+@media (orientation: landscape) {
+  .app { flex-direction: row; }
+  .bar { flex-direction: column; border-top: 0; border-left: 1px solid var(--line);
+    padding: calc(10px + env(safe-area-inset-top, 0px)) calc(10px + env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) 10px; }
+  .group { flex-direction: column; }
+}
+
+/* Paneles */
+.sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; z-index: 20; }
+.card { background: #15191b; border: 1px solid var(--line); border-radius: 18px 18px 0 0; width: min(560px, 100%); max-height: 88%; overflow: auto;
+  padding: 18px max(16px, env(safe-area-inset-right, 0px)) calc(18px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.card h2 { margin: 0 0 4px; font-size: 18px; text-wrap: balance; }
+.card p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.row label { font-weight: 600; }
+.row .hint { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; flex: none; }
+.seg button { padding: 8px 11px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--accent); color: var(--bg); font-weight: 700; }
+.btn { display: block; width: 100%; padding: 13px; border-radius: 12px; background: var(--accent); color: var(--bg); font-weight: 700; text-align: center; margin-top: 12px; }
+.btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 8px; }
+.gallery button { aspect-ratio: 1; border-radius: 10px; overflow: hidden; border: 2px solid transparent; position: relative; background: #000; }
+.gallery button.sel { border-color: var(--accent); }
+.gallery img { width: 100%; height: 100%; object-fit: cover; }
+.gallery .tick { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.4); }
+.gallery .sel .tick { background: var(--accent); border-color: var(--accent); }
+.big { width: 100%; border-radius: 12px; display: block; background: #000; margin: 6px 0; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+
+.msg { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; z-index: 30; background: var(--bg); }
+.msg div { max-width: 360px; }
+.msg h1 { font-size: 26px; margin: 0 0 8px; }
+.msg p { color: var(--muted); margin: 0 0 16px; }
+.toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 54px); transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); padding: 8px 14px; border-radius: 999px; font-size: 13px; z-index: 40; }
+@media (prefers-reduced-motion: reduce) { .flash, .shutter span { transition: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="view" aria-label="Vista en vivo del microscopio"></canvas>
+    <div class="flash" id="flash"></div>
+    <div class="count" id="count" hidden></div>
+    <div class="hud">
+      <span class="chip">Giro <b id="hudRot">180°</b></span>
+      <span class="chip" id="hudFlip" hidden><b>Espejo</b></span>
+      <span class="chip" id="hudZoom" hidden>Zoom <b></b></span>
+      <span class="chip" id="hudTimer" hidden>Temporizador <b></b></span>
+    </div>
+    <div class="zoom" id="zoomBox" hidden>
+      <span aria-hidden="true">1×</span>
+      <input type="range" id="zoom" min="1" max="4" step="0.05" value="1" aria-label="Zoom">
+      <output id="zoomOut">1.0×</output>
+    </div>
+  </div>
+
+  <div class="bar">
+    <div class="group">
+      <button class="tool" id="bRot" aria-label="Girar 90°" title="Girar 90°">
+        <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+      </button>
+      <button class="tool" id="bZoom" aria-label="Zoom" title="Zoom">
+        <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg>
+      </button>
+    </div>
+    <button class="shutter" id="bShot" aria-label="Tomar foto"><span></span></button>
+    <div class="group">
+      <button class="tool" id="bSet" aria-label="Ajustes" title="Ajustes">
+        <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button>
+      <button class="thumb" id="bGal" aria-label="Ver fotos"><i id="nPics" hidden>0</i></button>
+    </div>
+  </div>
+</div>
+
+<!-- Ajustes -->
+<div class="sheet" id="setSheet" hidden>
+  <div class="card" role="dialog" aria-labelledby="setTitle">
+    <h2 id="setTitle">Ajustes de imagen</h2>
+    <p>Con su adaptador la imagen llega girada 180°, sin espejo. Si cambia de adaptador, ajuste aquí hasta que la vista coincida con el ocular.</p>
+    <div class="row"><label>Giro</label>
+      <div class="seg" id="segRot"><button data-v="0">0°</button><button data-v="90">90°</button><button data-v="180">180°</button><button data-v="270">270°</button></div></div>
+    <div class="row"><label>Espejo<span class="hint">Izquierda ↔ derecha</span></label>
+      <div class="seg" id="segFlip"><button data-v="0">No</button><button data-v="1">Sí</button></div></div>
+    <div class="row"><label>Formato</label>
+      <div class="seg" id="segCrop"><button data-v="full">Completo</button><button data-v="square">Cuadrado</button></div></div>
+    <div class="row"><label>Temporizador<span class="hint">Evita mover el microscopio al tocar</span></label>
+      <div class="seg" id="segTimer"><button data-v="0">No</button><button data-v="2">2 s</button><button data-v="5">5 s</button></div></div>
+    <div class="row"><label>Lente del iPhone<span class="hint" id="camName">Cámara trasera</span></label>
+      <button class="seg" id="bCam" style="padding:8px 12px">Cambiar</button></div>
+    <button class="btn" id="setDone">Listo</button>
+  </div>
+</div>
+
+<!-- Galería -->
+<div class="sheet" id="galSheet" hidden>
+  <div class="card" role="dialog" aria-labelledby="galTitle">
+    <h2 id="galTitle">Fotos de esta sesión</h2>
+    <p>Toque las fotos que quiera guardar y luego "Guardar en Fotos" → <b>Guardar imágenes</b>. Las fotos solo quedan en este iPhone; si cierra la app sin guardarlas se pierden.</p>
+    <div id="galBody"></div>
+    <button class="btn" id="bSave">Guardar en Fotos</button>
+    <button class="btn ghost" id="bDel">Borrar seleccionadas</button>
+    <button class="btn ghost" id="galDone">Volver a la cámara</button>
+  </div>
+</div>
+
+<div class="msg" id="msg">
+  <div>
+    <h1>MicroCam</h1>
+    <p id="msgText">Coloque el iPhone en el adaptador del microscopio y active la cámara.</p>
+    <button class="btn" id="bStart">Activar cámara</button>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const video = $('video'), view = $('view'), vctx = view.getContext('2d');
+
+const DEFAULTS = { rot: 180, flip: 0, crop: 'full', timer: 0, zoom: 1, deviceId: '' };
+let cfg = { ...DEFAULTS };
+try { Object.assign(cfg, JSON.parse(localStorage.getItem('microcam') || '{}')); } catch (e) {}
+const save = () => { try { localStorage.setItem('microcam', JSON.stringify(cfg)); } catch (e) {} };
+
+let stream = null, cams = [], pics = [], selected = new Set(), busy = false, wakeLock = null;
+
+function toast(t) {
+  const el = $('toast'); el.textContent = t; el.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 2200);
+}
+
+// Zona del cuadro que se usa (zoom y formato) y tamaño final ya girado
+function geometry(vw, vh) {
+  let sw = vw / cfg.zoom, sh = vh / cfg.zoom;
+  if (cfg.crop === 'square') sw = sh = Math.min(sw, sh);
+  const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+  const turned = cfg.rot % 180 !== 0;
+  return { sx, sy, sw, sh, ow: turned ? sh : sw, oh: turned ? sw : sh };
+}
+
+// Dibuja el cuadro con giro y espejo; lo usan la vista en vivo y la foto
+function paint(ctx, g, scale) {
+  ctx.save();
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.translate(g.ow / 2, g.oh / 2);
+  ctx.rotate(cfg.rot * Math.PI / 180);
+  if (cfg.flip) ctx.scale(-1, 1);
+  ctx.drawImage(video, g.sx, g.sy, g.sw, g.sh, -g.sw / 2, -g.sh / 2, g.sw, g.sh);
+  ctx.restore();
+}
+
+function loop() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (vw && vh) {
+    const g = geometry(vw, vh);
+    const box = $('stage').getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const fit = Math.min(box.width / g.ow, box.height / g.oh);
+    const cw = Math.round(g.ow * fit * dpr), ch = Math.round(g.oh * fit * dpr);
+    if (view.width !== cw || view.height !== ch) {
+      view.width = cw; view.height = ch;
+      view.style.width = (cw / dpr) + 'px'; view.style.height = (ch / dpr) + 'px';
+    }
+    paint(vctx, g, cw / g.ow);
+  }
+  requestAnimationFrame(loop);
+}
+
+async function startCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const video_c = { width: { ideal: 4032 }, height: { ideal: 3024 } };
+  if (cfg.deviceId) video_c.deviceId = { exact: cfg.deviceId };
+  else video_c.facingMode = { ideal: 'environment' };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: video_c, audio: false });
+  } catch (e) {
+    if (cfg.deviceId) { cfg.deviceId = ''; save(); return startCamera(); }
+    throw e;
+  }
+  video.srcObject = stream;
+  await video.play();
+  const track = stream.getVideoTracks()[0];
+  $('camName').textContent = (track.label || 'Cámara trasera') + ' · ' + video.videoWidth + '×' + video.videoHeight;
+  try { cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'); } catch (e) {}
+  keepAwake();
+}
+
+async function keepAwake() {
+  try { if ('wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => wakeLock = null); } } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+
+$('bStart').onclick = async () => {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $('msgText').textContent = 'Este navegador no permite usar la cámara. Abra la app en Safari.';
+    return;
+  }
+  try {
+    await startCamera();
+    $('msg').hidden = true;
+    requestAnimationFrame(loop);
+  } catch (e) {
+    $('msgText').textContent = 'No se pudo abrir la cámara. Revise en Ajustes del iPhone → Safari → Cámara que esté en "Permitir", y vuelva a intentar.';
+    $('bStart').textContent = 'Intentar de nuevo';
+  }
+};
+
+// Captura
+function capture() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw) return;
+  const g = geometry(vw, vh);
+  const c = document.createElement('canvas');
+  c.width = Math.round(g.ow); c.height = Math.round(g.oh);
+  paint(c.getContext('2d'), g, 1);
+  $('flash').classList.add('on'); requestAnimationFrame(() => requestAnimationFrame(() => $('flash').classList.remove('on')));
+  c.toBlob(blob => {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    const name = `microscopio_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`;
+    pics.push({ blob, url: URL.createObjectURL(blob), name, saved: false });
+    refreshThumb();
+  }, 'image/jpeg', 0.95);
+}
+
+$('bShot').onclick = async () => {
+  if (busy || !stream) return;
+  busy = true;
+  for (let s = cfg.timer; s > 0; s--) {
+    $('count').textContent = s; $('count').hidden = false;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  $('count').hidden = true;
+  capture();
+  busy = false;
+};
+
+function refreshThumb() {
+  const b = $('bGal'), last = pics[pics.length - 1];
+  b.querySelectorAll('img').forEach(i => i.remove());
+  if (last) { const i = new Image(); i.src = last.url; i.alt = ''; b.prepend(i); }
+  const unsaved = pics.filter(p => !p.saved).length;
+  $('nPics').hidden = !unsaved; $('nPics').textContent = unsaved;
+}
+
+// Controles rápidos
+$('bRot').onclick = () => { cfg.rot = (cfg.rot + 90) % 360; save(); syncUI(); };
+$('bZoom').onclick = () => { $('zoomBox').hidden = !$('zoomBox').hidden; syncUI(); };
+$('zoom').oninput = e => { cfg.zoom = +e.target.value; save(); syncUI(); };
+
+function seg(id, key, num) {
+  $(id).onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    cfg[key] = num ? +b.dataset.v : b.dataset.v; save(); syncUI();
+  };
+}
+seg('segRot', 'rot', true); seg('segFlip', 'flip', true); seg('segCrop', 'crop', false); seg('segTimer', 'timer', true);
+
+$('bCam').onclick = async () => {
+  if (cams.length < 2) { toast('Solo hay una cámara disponible'); return; }
+  const cur = stream?.getVideoTracks()[0]?.getSettings().deviceId;
+  const i = cams.findIndex(c => c.deviceId === cur);
+  cfg.deviceId = cams[(i + 1) % cams.length].deviceId; save();
+  try { await startCamera(); toast($('camName').textContent.split(' · ')[0]); } catch (e) { toast('No se pudo cambiar de lente'); }
+};
+
+function syncUI() {
+  $('hudRot').textContent = cfg.rot + '°';
+  $('hudFlip').hidden = !cfg.flip;
+  $('hudZoom').hidden = cfg.zoom <= 1.01; $('hudZoom').querySelector('b').textContent = cfg.zoom.toFixed(1) + '×';
+  $('hudTimer').hidden = !cfg.timer; $('hudTimer').querySelector('b').textContent = cfg.timer + ' s';
+  $('zoom').value = cfg.zoom; $('zoomOut').textContent = cfg.zoom.toFixed(1) + '×';
+  $('bZoom').classList.toggle('on', !$('zoomBox').hidden);
+  const mark = (id, v) => $(id).querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === String(v)));
+  mark('segRot', cfg.rot); mark('segFlip', cfg.flip); mark('segCrop', cfg.crop); mark('segTimer', cfg.timer);
+}
+
+$('bSet').onclick = () => $('setSheet').hidden = false;
+$('setDone').onclick = () => $('setSheet').hidden = true;
+$('setSheet').onclick = e => { if (e.target.id === 'setSheet') e.currentTarget.hidden = true; };
+
+// Galería
+function renderGallery() {
+  const body = $('galBody');
+  body.textContent = '';
+  if (!pics.length) { body.innerHTML = '<div class="empty">Aún no ha tomado fotos.</div>'; return; }
+  const grid = document.createElement('div'); grid.className = 'gallery';
+  pics.forEach((p, i) => {
+    const b = document.createElement('button');
+    b.className = selected.has(i) ? 'sel' : '';
+    b.setAttribute('aria-label', 'Foto ' + (i + 1));
+    b.innerHTML = `<img src="${p.url}" alt=""><span class="tick"></span>`;
+    b.onclick = () => { selected.has(i) ? selected.delete(i) : selected.add(i); renderGallery(); };
+    grid.appendChild(b);
+  });
+  body.appendChild(grid);
+  if (selected.size === 1) {
+    const big = new Image(); big.className = 'big'; big.src = pics[[...selected][0]].url; big.alt = 'Foto seleccionada';
+    body.appendChild(big);
+  }
+  $('bSave').textContent = selected.size ? `Guardar en Fotos (${selected.size})` : 'Guardar en Fotos';
+}
+
+$('bGal').onclick = () => {
+  selected = new Set(pics.map((p, i) => p.saved ? -1 : i).filter(i => i >= 0));
+  renderGallery(); $('galSheet').hidden = false;
+};
+$('galDone').onclick = () => $('galSheet').hidden = true;
+
+$('bSave').onclick = async () => {
+  if (!selected.size) { toast('Seleccione al menos una foto'); return; }
+  const idx = [...selected];
+  const files = idx.map(i => new File([pics[i].blob], pics[i].name, { type: 'image/jpeg' }));
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try {
+      await navigator.share({ files });
+      idx.forEach(i => pics[i].saved = true);
+      selected.clear(); renderGallery(); refreshThumb();
+    } catch (e) { if (e.name !== 'AbortError') toast('No se pudo abrir el menú de compartir'); }
+  } else {
+    toast('Mantenga el dedo sobre la foto grande y elija "Guardar en Fotos"');
+  }
+};
+
+$('bDel').onclick = () => {
+  if (!selected.size) { toast('Seleccione las fotos a borrar'); return; }
+  const b = $('bDel');
+  if (!b.dataset.confirm) { b.dataset.confirm = 1; b.textContent = `Toque otra vez para borrar ${selected.size}`; setTimeout(() => { delete b.dataset.confirm; b.textContent = 'Borrar seleccionadas'; }, 3000); return; }
+  delete b.dataset.confirm; b.textContent = 'Borrar seleccionadas';
+  pics = pics.filter((p, i) => { if (selected.has(i)) { URL.revokeObjectURL(p.url); return false; } return true; });
+  selected.clear(); renderGallery(); refreshThumb();
+};
+
+window.addEventListener('beforeunload', e => { if (pics.some(p => !p.saved)) { e.preventDefault(); e.returnValue = ''; } });
+
+syncUI();
+</script>
+</body>
+</html>

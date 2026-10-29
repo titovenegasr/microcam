@@ -1,0 +1,9 @@
+{
+  "name": "MicroCam",
+  "short_name": "MicroCam",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b0d0e",
+  "theme_color": "#0b0d0e",
+  "icons": [{ "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }]
+}
