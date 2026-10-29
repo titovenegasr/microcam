@@ -57,6 +57,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .thumb i { position: absolute; right: 2px; bottom: 2px; font-style: normal; font-size: 10px; font-weight: 700; background: var(--accent); color: var(--bg); border-radius: 6px; padding: 0 4px; }
 
 .zoom { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; width: min(320px, calc(100% - 32px)); }
+.pending { position: absolute; bottom: 64px; left: 50%; transform: translateX(-50%); background: var(--accent); color: var(--bg); font-weight: 700; padding: 12px 20px; border-radius: 999px; box-shadow: 0 4px 20px rgba(0,0,0,.5); white-space: nowrap; }
 .zoom input { flex: 1; accent-color: var(--accent); }
 .zoom output { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; font-size: 13px; }
 
@@ -114,6 +115,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       <span class="chip" id="hudZoom" hidden>Zoom <b></b></span>
       <span class="chip" id="hudTimer" hidden>Temporizador <b></b></span>
     </div>
+    <button class="pending" id="bPending" hidden>Guardar foto en el iPhone</button>
     <div class="zoom" id="zoomBox" hidden>
       <span aria-hidden="true">1×</span>
       <input type="range" id="zoom" min="1" max="4" step="0.05" value="1" aria-label="Zoom">
@@ -153,6 +155,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       <div class="seg" id="segCrop"><button data-v="full">Completo</button><button data-v="square">Cuadrado</button></div></div>
     <div class="row"><label>Temporizador<span class="hint">Evita mover el microscopio al tocar</span></label>
       <div class="seg" id="segTimer"><button data-v="0">No</button><button data-v="2">2 s</button><button data-v="5">5 s</button></div></div>
+    <div class="row"><label>Guardar en Fotos<span class="hint">Abre el menú de guardar después de cada foto</span></label>
+      <div class="seg" id="segSave"><button data-v="1">Al tomar</button><button data-v="0">Al final</button></div></div>
     <div class="row"><label>Lente del iPhone<span class="hint" id="camName">Cámara trasera</span></label>
       <button class="seg" id="bCam" style="padding:8px 12px">Cambiar</button></div>
     <button class="btn" id="setDone">Listo</button>
@@ -184,7 +188,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 const $ = id => document.getElementById(id);
 const video = $('video'), view = $('view'), vctx = view.getContext('2d');
 
-const DEFAULTS = { rot: 180, flip: 0, crop: 'full', timer: 0, zoom: 1, deviceId: '' };
+const DEFAULTS = { rot: 180, flip: 0, crop: 'full', timer: 0, zoom: 1, deviceId: '', autosave: 1 };
 let cfg = { ...DEFAULTS };
 try { Object.assign(cfg, JSON.parse(localStorage.getItem('microcam') || '{}')); } catch (e) {}
 const save = () => { try { localStorage.setItem('microcam', JSON.stringify(cfg)); } catch (e) {} };
@@ -233,29 +237,47 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-async function startCamera() {
+// El iPhone ofrece cámaras "combinadas" (doble/triple) que saltan solas entre lentes;
+// en el adaptador eso hace desaparecer la imagen, así que solo se usan lentes individuales.
+const VIRTUAL = /dual|triple|doble|tripl/i, FRONT = /front|frontal|delanter|depth|profundidad/i, SECOND = /ultra|tele/i;
+const rearLenses = () => cams.filter(c => c.label && !FRONT.test(c.label) && !VIRTUAL.test(c.label));
+const mainLens = () => { const r = rearLenses(); return r.find(c => !SECOND.test(c.label)) || r[0]; };
+
+async function openStream(deviceId) {
   if (stream) stream.getTracks().forEach(t => t.stop());
-  const video_c = { width: { ideal: 4032 }, height: { ideal: 3024 } };
-  if (cfg.deviceId) video_c.deviceId = { exact: cfg.deviceId };
-  else video_c.facingMode = { ideal: 'environment' };
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: video_c, audio: false });
-  } catch (e) {
-    if (cfg.deviceId) { cfg.deviceId = ''; save(); return startCamera(); }
-    throw e;
-  }
+  const v = { width: { ideal: 4032 }, height: { ideal: 3024 } };
+  if (deviceId) v.deviceId = { exact: deviceId };
+  else v.facingMode = { ideal: 'environment' };
+  stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
   video.srcObject = stream;
   await video.play();
+}
+
+async function startCamera() {
+  // La primera vez se abre cualquier cámara trasera para que el iPhone muestre los nombres de los lentes
+  if (!cams.length) {
+    await openStream('');
+    try { cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'); } catch (e) {}
+  }
+  const lens = rearLenses().find(c => c.deviceId === cfg.deviceId) || mainLens();
+  const cur = stream?.active ? stream.getVideoTracks()[0].getSettings().deviceId : null;
+  if (lens && lens.deviceId !== cur) {
+    try { await openStream(lens.deviceId); } catch (e) { await openStream(''); }
+  } else if (!cur) await openStream('');
   const track = stream.getVideoTracks()[0];
   $('camName').textContent = (track.label || 'Cámara trasera') + ' · ' + video.videoWidth + '×' + video.videoHeight;
-  try { cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'); } catch (e) {}
   keepAwake();
 }
 
 async function keepAwake() {
   try { if ('wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => wakeLock = null); } } catch (e) {}
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  keepAwake();
+  // Al volver a la app el iPhone puede haber cerrado la cámara
+  if (stream && !stream.active) startCamera().catch(() => toast('Toque "Activar cámara" de nuevo'));
+});
 
 $('bStart').onclick = async () => {
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -275,30 +297,54 @@ $('bStart').onclick = async () => {
 // Captura
 function capture() {
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (!vw) return;
+  if (!vw) return Promise.resolve(-1);
   const g = geometry(vw, vh);
   const c = document.createElement('canvas');
   c.width = Math.round(g.ow); c.height = Math.round(g.oh);
   paint(c.getContext('2d'), g, 1);
   $('flash').classList.add('on'); requestAnimationFrame(() => requestAnimationFrame(() => $('flash').classList.remove('on')));
-  c.toBlob(blob => {
+  return new Promise(resolve => c.toBlob(blob => {
     const d = new Date(), p = n => String(n).padStart(2, '0');
     const name = `microscopio_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`;
     pics.push({ blob, url: URL.createObjectURL(blob), name, saved: false });
     refreshThumb();
-  }, 'image/jpeg', 0.95);
+    resolve(pics.length - 1);
+  }, 'image/jpeg', 0.95));
+}
+
+// Abre el menú del iPhone con las fotos; "Guardar imagen(es)" las pasa al carrete
+async function shareToPhotos(idx) {
+  const files = idx.map(i => new File([pics[i].blob], pics[i].name, { type: 'image/jpeg' }));
+  if (!(navigator.canShare && navigator.canShare({ files }))) { toast('Mantenga el dedo sobre la foto y elija "Guardar en Fotos"'); return 'unsupported'; }
+  try {
+    await navigator.share({ files });
+    idx.forEach(i => pics[i].saved = true);
+    refreshThumb();
+    return 'ok';
+  } catch (e) {
+    return e.name === 'AbortError' ? 'cancel' : 'blocked';
+  }
 }
 
 $('bShot').onclick = async () => {
   if (busy || !stream) return;
   busy = true;
+  $('bPending').hidden = true;
   for (let s = cfg.timer; s > 0; s--) {
     $('count').textContent = s; $('count').hidden = false;
     await new Promise(r => setTimeout(r, 1000));
   }
   $('count').hidden = true;
-  capture();
+  const i = await capture();
   busy = false;
+  if (i < 0 || !cfg.autosave) return;
+  // Si el iPhone no deja abrir el menú solo (p. ej. tras el temporizador), aparece un botón para guardarla
+  if (await shareToPhotos([i]) === 'blocked') $('bPending').hidden = false;
+};
+
+$('bPending').onclick = async () => {
+  const idx = pics.map((p, i) => p.saved ? -1 : i).filter(i => i >= 0);
+  if (idx.length && await shareToPhotos(idx) === 'ok') $('bPending').hidden = true;
 };
 
 function refreshThumb() {
@@ -320,13 +366,14 @@ function seg(id, key, num) {
     cfg[key] = num ? +b.dataset.v : b.dataset.v; save(); syncUI();
   };
 }
-seg('segRot', 'rot', true); seg('segFlip', 'flip', true); seg('segCrop', 'crop', false); seg('segTimer', 'timer', true);
+seg('segRot', 'rot', true); seg('segFlip', 'flip', true); seg('segCrop', 'crop', false); seg('segTimer', 'timer', true); seg('segSave', 'autosave', true);
 
 $('bCam').onclick = async () => {
-  if (cams.length < 2) { toast('Solo hay una cámara disponible'); return; }
+  const lenses = rearLenses();
+  if (lenses.length < 2) { toast('Solo hay un lente disponible'); return; }
   const cur = stream?.getVideoTracks()[0]?.getSettings().deviceId;
-  const i = cams.findIndex(c => c.deviceId === cur);
-  cfg.deviceId = cams[(i + 1) % cams.length].deviceId; save();
+  const i = lenses.findIndex(c => c.deviceId === cur);
+  cfg.deviceId = lenses[(i + 1) % lenses.length].deviceId; save();
   try { await startCamera(); toast($('camName').textContent.split(' · ')[0]); } catch (e) { toast('No se pudo cambiar de lente'); }
 };
 
@@ -338,7 +385,7 @@ function syncUI() {
   $('zoom').value = cfg.zoom; $('zoomOut').textContent = cfg.zoom.toFixed(1) + '×';
   $('bZoom').classList.toggle('on', !$('zoomBox').hidden);
   const mark = (id, v) => $(id).querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === String(v)));
-  mark('segRot', cfg.rot); mark('segFlip', cfg.flip); mark('segCrop', cfg.crop); mark('segTimer', cfg.timer);
+  mark('segRot', cfg.rot); mark('segFlip', cfg.flip); mark('segCrop', cfg.crop); mark('segTimer', cfg.timer); mark('segSave', cfg.autosave);
 }
 
 $('bSet').onclick = () => $('setSheet').hidden = false;
@@ -367,25 +414,20 @@ function renderGallery() {
   $('bSave').textContent = selected.size ? `Guardar en Fotos (${selected.size})` : 'Guardar en Fotos';
 }
 
-$('bGal').onclick = () => {
-  selected = new Set(pics.map((p, i) => p.saved ? -1 : i).filter(i => i >= 0));
+// Si hay fotos sin guardar, el cuadrito las guarda todas de una vez; si no, muestra la galería
+$('bGal').onclick = async () => {
+  const idx = pics.map((p, i) => p.saved ? -1 : i).filter(i => i >= 0);
+  if (idx.length && await shareToPhotos(idx) === 'ok') { $('bPending').hidden = true; return; }
+  selected = new Set(idx);
   renderGallery(); $('galSheet').hidden = false;
 };
 $('galDone').onclick = () => $('galSheet').hidden = true;
 
 $('bSave').onclick = async () => {
   if (!selected.size) { toast('Seleccione al menos una foto'); return; }
-  const idx = [...selected];
-  const files = idx.map(i => new File([pics[i].blob], pics[i].name, { type: 'image/jpeg' }));
-  if (navigator.canShare && navigator.canShare({ files })) {
-    try {
-      await navigator.share({ files });
-      idx.forEach(i => pics[i].saved = true);
-      selected.clear(); renderGallery(); refreshThumb();
-    } catch (e) { if (e.name !== 'AbortError') toast('No se pudo abrir el menú de compartir'); }
-  } else {
-    toast('Mantenga el dedo sobre la foto grande y elija "Guardar en Fotos"');
-  }
+  const r = await shareToPhotos([...selected]);
+  if (r === 'ok') { selected.clear(); renderGallery(); }
+  else if (r === 'blocked') toast('No se pudo abrir el menú de guardar');
 };
 
 $('bDel').onclick = () => {
